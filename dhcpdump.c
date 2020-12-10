@@ -50,6 +50,7 @@ int	max_data_len;			// maximum size of a packet
 int	tcpdump_style = -1;
 char	errbuf[PCAP_ERRBUF_SIZE];
 char	*hmask = NULL;
+char	*sep = "|";
 regex_t	preg;
 
 int	check_ch(u_char *data, int data_len);
@@ -73,7 +74,7 @@ void	printHex(u_char *data, int len);
 void	printHexString(u_char *data, int len);
 
 void usage() {
-	printf("Usage: $0 <-i interface> [-h macaddress]\n");
+	printf("Usage: $0 [<-i interface>|<-r filename>] [-h macaddress] [-s separator|-n]\n");
 	exit(0);
 }
 
@@ -82,6 +83,7 @@ int main(int argc, char **argv) {
 	pcap_t *cap;
 	struct bpf_program fp;
 	char	*interface = NULL;
+	char	*filename = NULL;
 
 	for (i = 1; i < argc; i++) {
 		if (argv[i] == NULL || argv[i][0] != '-') break;
@@ -92,6 +94,15 @@ int main(int argc, char **argv) {
 		case 'i':
 			interface = argv[++i];
 			break;
+		case 'r':
+			filename = argv[++i];
+			break;
+		case 's':
+			sep = argv[++i];
+			break;
+		case 'n':
+			sep = "\n  ";
+			break;
 		default:
 			fprintf(stderr, "%s: %c: uknown option\n",
 			    argv[0], argv[i][1]);
@@ -99,19 +110,24 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	if (interface == NULL) usage();
+	if (interface == NULL && filename == NULL) usage();
 
 	if (hmask)
 		regcomp(&preg, hmask, REG_EXTENDED | REG_ICASE | REG_NOSUB);
 
-	if ((cap = pcap_open_live(interface, 1500, 1, 100, errbuf)) == NULL)
-		errx(1, "pcap_open_live(): %s", errbuf);
+	if (interface != NULL) {
+		if ((cap = pcap_open_live(interface, 1500, 1, 100, errbuf)) == NULL)
+				errx(1, "pcap_open_live(): %s", errbuf);
+	} else {
+		if ((cap = pcap_open_offline(filename, errbuf)) == NULL)
+				errx(1, "pcap_open_offline(): %s", errbuf);
+	}
 	if (pcap_compile(cap, &fp, "udp and (port bootpc or port bootps)", 0, 0) < 0)
 		errx(1,"pcap_compile: %s", pcap_geterr(cap));
 	if (pcap_setfilter(cap, &fp) < 0)
 		errx(1,"pcap_setfilter: %s", pcap_geterr(cap));
 	if (pcap_loop(cap, 0, pcap_callback, NULL) < 0)
-		errx(1,"pcap_loop(%s): %s", interface, pcap_geterr(cap));
+		errx(1,"pcap_loop(%s): %s", (interface != NULL) ? interface : filename, pcap_geterr(cap));
 
 	return 0;
 }
@@ -318,29 +334,29 @@ int printdata(u_char *data, int data_len) {
 		return 0;
 
 	printf("TIME: %s", timestamp);
-	printf("|IP: %s (%s) > %s (%s)",
+	printf("%sIP: %s (%s) > %s (%s)", sep,
 	    ip_origin, mac_origin, ip_destination, mac_destination);
-	printf("|OP: %d (%s)", data[0], operands[data[0]]);
-	printf("|HTYPE: %d (%s)", data[1], htypes[data[1]]);
-	printf("|HLEN: %d", data[2]);
-	printf("|HOPS: %d", data[3]);
-	printf("|XID: %02x%02x%02x%02x",
-	    data[4], data[5], data[6], data[7]);
-	printf("|SECS: "); print16bits(data + 8);
-	printf("|FLAGS: %x", 255 * data[10] + data[11]);
+	printf("%sOP: %d (%s)", sep, data[0], operands[data[0]]);
+	printf("%sHTYPE: %d (%s)", sep, data[1], htypes[data[1]]);
+	printf("%sHLEN: %d", sep, data[2]);
+	printf("%sHOPS: %d", sep, data[3]);
+	printf("%sXID: %02x%02x%02x%02x",
+	    sep, data[4], data[5], data[6], data[7]);
+	printf("%sSECS: ", sep); print16bits(data + 8);
+	printf("%sFLAGS: %x", sep, 255 * data[10] + data[11]);
 
-	printf("|CIADDR: "); printIPaddress(data + 12);
-	printf("|YIADDR: "); printIPaddress(data + 16);
-	printf("|SIADDR: "); printIPaddress(data + 20);
-	printf("|GIADDR: "); printIPaddress(data + 24);
-	printf("|CHADDR: "); printHexColon(data+28, 16);
-	printf("|SNAME: %s.", data + 44);
-	printf("|FNAME: %s.", data + 108);
+	printf("%sCIADDR: ", sep); printIPaddress(data + 12);
+	printf("%sYIADDR: ", sep); printIPaddress(data + 16);
+	printf("%sSIADDR: ", sep); printIPaddress(data + 20);
+	printf("%sGIADDR: ", sep); printIPaddress(data + 24);
+	printf("%sCHADDR: ", sep); printHexColon(data+28, 16);
+	printf("%sSNAME: %s.", sep, data + 44);
+	printf("%sFNAME: %s.", sep, data + 108);
 
 	j = 236;
 	j += 4;	/* cookie */
 	while (j < data_len && data[j] != 255) {
-		printf("|OPTION: %3d (%3d) %-26s", data[j], data[j + 1],
+		printf("%sOPTION: %3d (%3d) %-26s", sep, data[j], data[j + 1],
 		    dhcp_options[data[j]]);
 
 	switch (data[j]) {
@@ -527,7 +543,7 @@ int printdata(u_char *data, int data_len) {
 		break;
 
 	case 82:	// Relay Agent Information
-		printf("|");
+		printf("%s", sep);
 		for (i = j + 2; i < j + data[j + 1]; ) {
 			if (i != j+2) {
 				printf("|");
